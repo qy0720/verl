@@ -1299,3 +1299,76 @@ def test_maybe_fix_3d_position_ids_preserves_valid_layout():
     fixed_samples = batch["position_ids"].unbind(dim=0)
     torch.testing.assert_close(fixed_samples[0], samples[0])
     torch.testing.assert_close(fixed_samples[1], samples[1])
+
+
+def test_fix_3d_position_ids_after_dataproto_serialization():
+    import pickle
+
+    samples = [torch.arange(4 * 17).reshape(4, 17)]
+    position_ids = tu.nested_tensor_from_tensor_list(samples, ragged_idx=2)
+
+    data = DataProto(
+        batch=TensorDict(
+            {"position_ids": position_ids},
+            batch_size=[1],
+        )
+    )
+
+    serialized = pickle.dumps(data)
+    restored = pickle.loads(serialized)
+
+    tu.maybe_fix_3d_position_ids(restored.batch)
+
+    fixed_position_ids = restored.batch["position_ids"]
+
+    assert fixed_position_ids._ragged_idx == 2
+    assert fixed_position_ids.values().shape == (4, 17)
+    assert fixed_position_ids.offsets().tolist() == [0, 17]
+
+    restored_samples = fixed_position_ids.unbind(dim=0)
+    assert len(restored_samples) == 1
+    torch.testing.assert_close(restored_samples[0], samples[0])
+
+    selected = tu.index_select_tensor_dict(restored.batch, [0])
+    selected_samples = selected["position_ids"].unbind(dim=0)
+
+    assert len(selected_samples) == 1
+    torch.testing.assert_close(selected_samples[0], samples[0])
+
+
+def test_3d_position_ids_after_dataproto_serialization(monkeypatch):
+    import pickle
+
+    import torch
+    from tensordict import TensorDict
+
+    from verl.protocol import DataProto
+    from verl.utils import tensordict_utils as tu
+
+    # Use the default serialization path, including consolidation.
+    monkeypatch.delenv("VERL_DATAPROTO_SERIALIZATION_METHOD", raising=False)
+
+    samples = [
+        torch.arange(4 * 17).reshape(4, 17),
+        torch.arange(4 * 17, 8 * 17).reshape(4, 17),
+    ]
+    position_ids = tu.nested_tensor_from_tensor_list(samples, ragged_idx=2)
+    data = DataProto(batch=TensorDict({"position_ids": position_ids}, batch_size=[2]))
+
+    restored = pickle.loads(pickle.dumps(data))
+    tu.maybe_fix_3d_position_ids(restored.batch)
+
+    fixed = restored.batch["position_ids"]
+    assert fixed._ragged_idx == 2
+    assert fixed.values().shape == (4, 34)
+    assert fixed.offsets().tolist() == [0, 17, 34]
+
+    actual_samples = fixed.unbind(dim=0)
+    assert len(actual_samples) == len(samples)
+    for actual, expected in zip(actual_samples, samples, strict=True):
+        torch.testing.assert_close(actual, expected)
+
+    selected = tu.index_select_tensor_dict(restored.batch, [1, 0])
+    selected_samples = selected["position_ids"].unbind(dim=0)
+    torch.testing.assert_close(selected_samples[0], samples[1])
+    torch.testing.assert_close(selected_samples[1], samples[0])

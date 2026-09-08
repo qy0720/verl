@@ -908,20 +908,39 @@ def contiguous(data: TensorDict) -> TensorDict:
 
 
 def maybe_fix_3d_position_ids(data: TensorDict):
-    """Repair 3D nested position_ids after TensorDict serialization."""
+    """Repair the layout of 3D nested position_ids."""
+    if "position_ids" not in data:
+        return
 
-    # TensorDict consolidation and pickle/unpickle may leave 3D VLM
-    # position_ids with an incorrect ragged dimension. Rebuild the
-    # NestedTensor so its values, offsets, and _ragged_idx remain consistent.
-    if "position_ids" in data and data["position_ids"].dim() == 3 and data["position_ids"].is_nested:
-        position_ids = data["position_ids"]
+    position_ids = data["position_ids"]
+    if position_ids.dim() != 3 or not position_ids.is_nested:
+        return
 
-        if getattr(position_ids, "_ragged_idx", None) != 2:
-            samples = list(position_ids.unbind(dim=0))
-            data["position_ids"] = nested_tensor_from_tensor_list(
-                samples,
-                ragged_idx=2,
-            )
+    if getattr(position_ids, "_ragged_idx", None) == 2:
+        return
+
+    values = position_ids.values()
+    offsets = position_ids.offsets()
+    total_length = offsets[-1].item()
+
+    # The sequence storage survived serialization, but its ragged
+    # dimension metadata was reset. Reconstruct before calling unbind.
+    if total_length == values.shape[1] and total_length > values.shape[0]:
+        data["position_ids"] = torch.nested.nested_tensor_from_jagged(
+            values=values,
+            offsets=offsets,
+            lengths=position_ids.lengths(),
+            jagged_dim=2,
+        )
+        return
+
+    # The current layout is internally consistent but uses the
+    # coordinate dimension as ragged. Repack the original samples.
+    samples = list(position_ids.unbind(dim=0))
+    data["position_ids"] = nested_tensor_from_tensor_list(
+        samples,
+        ragged_idx=2,
+    )
 
 
 def list_of_dict_to_tensordict(list_of_dicts: list[dict[str, Any]]) -> TensorDict:
