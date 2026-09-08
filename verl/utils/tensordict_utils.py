@@ -925,7 +925,7 @@ def maybe_fix_3d_position_ids(data: TensorDict):
 
     # The sequence storage survived serialization, but its ragged
     # dimension metadata was reset. Reconstruct before calling unbind.
-    if total_length == values.shape[1] and total_length > values.shape[0]:
+    if total_length == values.shape[1] and values.shape[0] in (3, 4):
         data["position_ids"] = torch.nested.nested_tensor_from_jagged(
             values=values,
             offsets=offsets,
