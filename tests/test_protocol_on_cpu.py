@@ -1301,41 +1301,6 @@ def test_maybe_fix_3d_position_ids_preserves_valid_layout():
     torch.testing.assert_close(fixed_samples[1], samples[1])
 
 
-def test_fix_3d_position_ids_after_dataproto_serialization():
-    import pickle
-
-    samples = [torch.arange(4 * 17).reshape(4, 17)]
-    position_ids = tu.nested_tensor_from_tensor_list(samples, ragged_idx=2)
-
-    data = DataProto(
-        batch=TensorDict(
-            {"position_ids": position_ids},
-            batch_size=[1],
-        )
-    )
-
-    serialized = pickle.dumps(data)
-    restored = pickle.loads(serialized)
-
-    tu.maybe_fix_3d_position_ids(restored.batch)
-
-    fixed_position_ids = restored.batch["position_ids"]
-
-    assert fixed_position_ids._ragged_idx == 2
-    assert fixed_position_ids.values().shape == (4, 17)
-    assert fixed_position_ids.offsets().tolist() == [0, 17]
-
-    restored_samples = fixed_position_ids.unbind(dim=0)
-    assert len(restored_samples) == 1
-    torch.testing.assert_close(restored_samples[0], samples[0])
-
-    selected = tu.index_select_tensor_dict(restored.batch, [0])
-    selected_samples = selected["position_ids"].unbind(dim=0)
-
-    assert len(selected_samples) == 1
-    torch.testing.assert_close(selected_samples[0], samples[0])
-
-
 def test_3d_position_ids_after_dataproto_serialization(monkeypatch):
     import pickle
 
